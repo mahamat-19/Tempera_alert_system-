@@ -11,7 +11,6 @@ After every 5 abnormal readings an alert message is sent to alert_queue.
 import threading
 import queue
 
-
 # Thresholds that define an abnormal reading
 ABNORMAL_LOW: float = -5.0
 ABNORMAL_HIGH: float = 35.0
@@ -84,15 +83,19 @@ class TemperatureProcessor:
         This method is intentionally side-effect-free regarding threading so
         it can be called directly in unit tests.
         """
-        status = "ABNORMAL" if self.is_abnormal(temperature) else "normal"
-        print(f"[Processor] Received {temperature:.2f} °C — {status}")
+        _RED   = "\033[91m"
+        _RESET = "\033[0m"
 
         if self.is_abnormal(temperature):
             self._abnormal_count += 1
-            print(f"[Processor] Abnormal count: {self._abnormal_count}")
-
-            if self._abnormal_count % ALERT_THRESHOLD == 0:
+            status = f"{_RED}ABNORMAL{_RESET}"
+            print(f"[Processor] Received {temperature:.2f} °C — {status}")
+            print(f"{_RED}[Processor] Abnormal count: {self._abnormal_count}{_RESET}")
+            if self._abnormal_count == ALERT_THRESHOLD:
                 self._send_alert()
+                self._abnormal_count = 0
+        else:
+            print(f"[Processor] Received {temperature:.2f} °C — normal")
 
     def _send_alert(self) -> None:
         """Build and enqueue an alert message."""
