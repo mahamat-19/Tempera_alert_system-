@@ -1,19 +1,8 @@
-"""
-main.py
--------
-Entry point for the Temperature Alert System.
-
-Launches all three clients as daemon threads and keeps the program alive
-until the user presses Ctrl+C.
-
-Run with:
-    python main.py
-"""
 
 import time
 import sys
 
-from shared_queues import temperature_queue, alert_queue
+from redis_config import make_redis_client
 from client1_generator import TemperatureGenerator
 from client2_processor import TemperatureProcessor
 from client3_reporter import AlertReporter
@@ -26,10 +15,12 @@ def main() -> None:
     print("=" * 60)
     print()
 
-    # Instantiate the three clients
-    generator = TemperatureGenerator(temperature_queue)
-    processor = TemperatureProcessor(temperature_queue, alert_queue)
-    reporter  = AlertReporter(alert_queue)
+    redis_client = make_redis_client()
+
+    # Instantiate the three clients — all share the same Redis connection
+    generator = TemperatureGenerator(redis_client)
+    processor = TemperatureProcessor(redis_client)
+    reporter  = AlertReporter(redis_client)
 
     # Start all three (each runs in its own daemon thread)
     reporter.start()    # start reporter first so it's ready for alerts

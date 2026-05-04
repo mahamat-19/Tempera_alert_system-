@@ -1,15 +1,9 @@
-"""
-client2_processor.py
----------------------
-Component 2 – Temperature Monitoring Processor.
-
-Exclusively reads temperature readings from temperature_queue.
-A reading is ABNORMAL if it is below -5 °C or above 35 °C.
-After every 5 abnormal readings an alert message is sent to alert_queue.
-"""
 
 import threading
-import queue
+
+import redis
+
+from redis_config import TEMPERATURE_QUEUE_KEY, ALERT_QUEUE_KEY
 
 # Thresholds that define an abnormal reading
 ABNORMAL_LOW: float = -5.0
@@ -21,19 +15,28 @@ ALERT_THRESHOLD: int = 5
 
 class TemperatureProcessor:
     """
-    Reads temperature readings from *temp_queue*, identifies abnormal values,
-    and dispatches an alert to *alert_queue* after every ALERT_THRESHOLD
-    abnormal readings.
+    Reads temperature readings from a Redis list, identifies abnormal values,
+    and dispatches an alert after every ALERT_THRESHOLD abnormal readings.
 
     Parameters
     ----------
-    temp_queue  : queue.Queue  – source of raw temperature readings.
-    alert_queue : queue.Queue  – destination for alert notifications.
+    redis_client : redis.Redis
+        Connected Redis client used for both reading and writing.
+    temp_key : str
+        Redis key to consume temperature readings from (blpop).
+    alert_key : str
+        Redis key to push alert messages to (rpush).
     """
 
-    def __init__(self, temp_queue: queue.Queue, alert_queue: queue.Queue):
-        self._temp_queue = temp_queue
-        self._alert_queue = alert_queue
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        temp_key: str = TEMPERATURE_QUEUE_KEY,
+        alert_key: str = ALERT_QUEUE_KEY,
+    ):
+        self._redis = redis_client
+        self._temp_key = temp_key
+        self._alert_key = alert_key
         self._abnormal_count: int = 0
         self._total_alerts_sent: int = 0
         self._stop_event = threading.Event()
@@ -53,8 +56,6 @@ class TemperatureProcessor:
     def stop(self) -> None:
         """Signal the processor thread to stop."""
         self._stop_event.set()
-        # Unblock the blocking get() so the thread can exit
-        self._temp_queue.put(None)
 
     def is_alive(self) -> bool:
         return self._thread.is_alive()
@@ -80,8 +81,7 @@ class TemperatureProcessor:
     def process_reading(self, temperature: float) -> None:
         """
         Evaluate one reading and send an alert if the threshold is reached.
-        This method is intentionally side-effect-free regarding threading so
-        it can be called directly in unit tests.
+        Side-effect-free regarding threading so it can be called in unit tests.
         """
         _RED   = "\033[91m"
         _RESET = "\033[0m"
@@ -98,27 +98,25 @@ class TemperatureProcessor:
             print(f"[Processor] Received {temperature:.2f} °C — normal")
 
     def _send_alert(self) -> None:
-        """Build and enqueue an alert message."""
+        """Build and push an alert message to the Redis alert queue."""
         self._total_alerts_sent += 1
         message = (
             f"ALERT: {ALERT_THRESHOLD} abnormal temperature readings "
             f"have been detected. "
             f"(Total abnormal so far: {self._abnormal_count})"
         )
-        self._alert_queue.put(message)
-        print(f"[Processor] Alert dispatched → alert_queue")
+        self._redis.rpush(self._alert_key, message)
+        print("[Processor] Alert dispatched → alert_queue")
 
     def _run(self) -> None:
-        """Main loop: block on queue, process each reading."""
+        """Main loop: blocking pop from Redis, process each reading."""
         while not self._stop_event.is_set():
-            try:
-                reading = self._temp_queue.get(timeout=1)
-                if reading is None:          # sentinel sent by stop()
-                    break
-                self.process_reading(reading)
-                self._temp_queue.task_done()
-            except queue.Empty:
+            # blpop returns (key, value) or None on timeout
+            result = self._redis.blpop(self._temp_key, timeout=1)
+            if result is None:
                 continue
+            _, raw = result
+            self.process_reading(float(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -126,9 +124,9 @@ class TemperatureProcessor:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import time
-    from shared_queues import temperature_queue, alert_queue
+    from redis_config import make_redis_client
 
-    processor = TemperatureProcessor(temperature_queue, alert_queue)
+    processor = TemperatureProcessor(make_redis_client())
     processor.start()
 
     try:

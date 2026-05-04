@@ -5,27 +5,28 @@ Tests for Client 3 – AlertReporter.
 
 Covers:
   - report_alert() prints the correct message to stdout.
-  - The reporter thread reads from the queue and calls report_alert().
+  - The reporter thread reads from Redis and calls report_alert().
   - Multiple sequential alerts are all reported.
 """
 
-import queue
 import time
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import fakeredis
 import pytest
 from client3_reporter import AlertReporter
+from redis_config import ALERT_QUEUE_KEY
 
 
 class TestReportAlert:
     """Unit tests for the console-output method."""
 
     def setup_method(self):
-        self.q = queue.Queue()
-        self.reporter = AlertReporter(self.q)
+        self.redis = fakeredis.FakeRedis()
+        self.reporter = AlertReporter(self.redis)
 
     def test_report_alert_prints_message(self, capsys):
         """report_alert() should print the supplied message to stdout."""
@@ -50,27 +51,27 @@ class TestReportAlert:
 
 
 class TestReporterThread:
-    """Integration-level tests — reporter thread reads from the queue."""
+    """Integration-level tests — reporter thread reads from Redis."""
 
     def _make_reporter(self):
-        q = queue.Queue()
-        reporter = AlertReporter(q)
-        return reporter, q
+        r = fakeredis.FakeRedis()
+        reporter = AlertReporter(r)
+        return reporter, r
 
     def test_reporter_reads_single_alert(self, capsys):
-        """A message placed on the queue should be printed by the thread."""
-        reporter, q = self._make_reporter()
+        """A message pushed to Redis should be printed by the thread."""
+        reporter, r = self._make_reporter()
         reporter.start()
         msg = "ALERT: 5 abnormal temperature readings have been detected."
-        q.put(msg)
+        r.rpush(ALERT_QUEUE_KEY, msg)
         time.sleep(0.3)   # give thread time to process
         reporter.stop()
         captured = capsys.readouterr()
         assert msg in captured.out
 
     def test_reporter_reads_multiple_alerts(self, capsys):
-        """All messages placed on the queue should eventually be printed."""
-        reporter, q = self._make_reporter()
+        """All messages pushed to Redis should eventually be printed."""
+        reporter, r = self._make_reporter()
         reporter.start()
         messages = [
             "ALERT: 5 abnormal temperature readings have been detected.",
@@ -78,7 +79,7 @@ class TestReporterThread:
             "ALERT: 5 abnormal temperature readings have been detected. (Total abnormal so far: 15)",
         ]
         for m in messages:
-            q.put(m)
+            r.rpush(ALERT_QUEUE_KEY, m)
         time.sleep(0.5)
         reporter.stop()
         captured = capsys.readouterr()

@@ -6,17 +6,17 @@ Tests for Client 2 – TemperatureProcessor.
 Covers:
   - Correct identification of normal vs abnormal readings.
   - Accurate accumulation of the abnormal counter.
-  - Alert is dispatched to alert_queue after every 5 abnormal readings.
+  - Alert is pushed to Redis after every 5 abnormal readings.
   - No alert is sent before 5 abnormal readings accumulate.
   - Alert message content is correct.
 """
 
-import queue
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import fakeredis
 import pytest
 from client2_processor import (
     TemperatureProcessor,
@@ -24,6 +24,7 @@ from client2_processor import (
     ABNORMAL_HIGH,
     ALERT_THRESHOLD,
 )
+from redis_config import ALERT_QUEUE_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -31,10 +32,9 @@ from client2_processor import (
 # ---------------------------------------------------------------------------
 
 def make_processor():
-    """Return a fresh processor with its own isolated queues."""
-    tq = queue.Queue()
-    aq = queue.Queue()
-    return TemperatureProcessor(tq, aq), tq, aq
+    """Return a fresh processor with its own isolated fakeredis client."""
+    r = fakeredis.FakeRedis()
+    return TemperatureProcessor(r), r
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def make_processor():
 class TestIsAbnormal:
 
     def setup_method(self):
-        self.proc, _, _ = make_processor()
+        self.proc, _ = make_processor()
 
     def test_normal_low_boundary(self):
         """Exactly ABNORMAL_LOW is normal (not below)."""
@@ -87,7 +87,7 @@ class TestIsAbnormal:
 class TestAbnormalCounter:
 
     def setup_method(self):
-        self.proc, _, self.aq = make_processor()
+        self.proc, self.redis = make_processor()
 
     def test_counter_starts_at_zero(self):
         assert self.proc.abnormal_count == 0
@@ -119,7 +119,7 @@ class TestAbnormalCounter:
 class TestAlertDispatching:
 
     def setup_method(self):
-        self.proc, _, self.aq = make_processor()
+        self.proc, self.redis = make_processor()
 
     def _send_abnormal(self, n: int):
         """Helper: feed n abnormal readings to the processor."""
@@ -129,24 +129,24 @@ class TestAlertDispatching:
     def test_no_alert_before_threshold(self):
         """Fewer than ALERT_THRESHOLD abnormal readings → no alert."""
         self._send_abnormal(ALERT_THRESHOLD - 1)
-        assert self.aq.empty()
+        assert self.redis.llen(ALERT_QUEUE_KEY) == 0
 
     def test_alert_sent_at_threshold(self):
         """Exactly ALERT_THRESHOLD abnormal readings → one alert."""
         self._send_abnormal(ALERT_THRESHOLD)
-        assert not self.aq.empty()
+        assert self.redis.llen(ALERT_QUEUE_KEY) == 1
         assert self.proc.total_alerts_sent == 1
 
     def test_alert_sent_every_threshold(self):
         """Two full batches → two alerts."""
         self._send_abnormal(ALERT_THRESHOLD * 2)
         assert self.proc.total_alerts_sent == 2
-        assert self.aq.qsize() == 2
+        assert self.redis.llen(ALERT_QUEUE_KEY) == 2
 
     def test_alert_message_content(self):
         """Alert message must contain the expected text."""
         self._send_abnormal(ALERT_THRESHOLD)
-        message = self.aq.get_nowait()
+        message = self.redis.lpop(ALERT_QUEUE_KEY).decode()
         assert "abnormal temperature readings" in message.lower()
         assert str(ALERT_THRESHOLD) in message
 
@@ -154,7 +154,7 @@ class TestAlertDispatching:
         """Sending only normal readings never triggers an alert."""
         for _ in range(ALERT_THRESHOLD * 3):
             self.proc.process_reading(20.0)
-        assert self.aq.empty()
+        assert self.redis.llen(ALERT_QUEUE_KEY) == 0
 
     def test_partial_batch_after_alert_no_extra_alert(self):
         """After one alert, 3 more abnormal readings (< threshold) = no second alert."""

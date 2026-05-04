@@ -1,18 +1,11 @@
-"""
-client1_generator.py
----------------------
-Component 1 – Temperature Generation Client.
-
-Connects to temperature_queue (point-to-point) and sends a randomly generated
-temperature reading (°C) every 3 seconds.
-Normal range: -10 °C to 40 °C.
-"""
 
 import random
 import time
 import threading
-import queue
 
+import redis
+
+from redis_config import TEMPERATURE_QUEUE_KEY
 
 # How often a new reading is produced (seconds)
 GENERATION_INTERVAL: float = 3.0
@@ -24,18 +17,26 @@ TEMP_MAX: float = 40.0
 
 class TemperatureGenerator:
     """
-    Generates random temperature readings and puts them on the given queue.
+    Generates random temperature readings and pushes them to a Redis list.
 
     Parameters
     ----------
-    temp_queue : queue.Queue
-        The destination queue for temperature readings.
+    redis_client : redis.Redis
+        Connected Redis client used to push readings.
+    temp_key : str
+        Redis key for the temperature queue list.
     interval : float
         Seconds between readings (default 3).
     """
 
-    def __init__(self, temp_queue: queue.Queue, interval: float = GENERATION_INTERVAL):
-        self._queue = temp_queue
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        temp_key: str = TEMPERATURE_QUEUE_KEY,
+        interval: float = GENERATION_INTERVAL,
+    ):
+        self._redis = redis_client
+        self._temp_key = temp_key
         self._interval = interval
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="GeneratorThread")
@@ -66,8 +67,8 @@ class TemperatureGenerator:
         return round(random.uniform(TEMP_MIN, TEMP_MAX), 2)
 
     def send_temperature(self, temperature: float) -> None:
-        """Put a single temperature reading onto the queue."""
-        self._queue.put(temperature)
+        """Push a single temperature reading onto the Redis queue."""
+        self._redis.rpush(self._temp_key, str(temperature))
 
     def _run(self) -> None:
         """Main loop: generate → send → sleep."""
@@ -82,9 +83,9 @@ class TemperatureGenerator:
 # Stand-alone entry-point (run this file directly to see the generator alone)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    from shared_queues import temperature_queue
+    from redis_config import make_redis_client
 
-    generator = TemperatureGenerator(temperature_queue)
+    generator = TemperatureGenerator(make_redis_client())
     generator.start()
 
     try:

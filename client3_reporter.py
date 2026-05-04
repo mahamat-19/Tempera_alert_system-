@@ -1,26 +1,27 @@
-"""
-client3_reporter.py
---------------------
-Component 3 – Alert Reporting Client.
 
-Reads alert messages from alert_queue and prints them to the console.
-"""
 
 import threading
-import queue
+
+import redis
+
+from redis_config import ALERT_QUEUE_KEY
 
 
 class AlertReporter:
     """
-    Listens on *alert_queue* and prints every alert message it receives.
+    Listens on a Redis list and prints every alert message it receives.
 
     Parameters
     ----------
-    alert_queue : queue.Queue  – source of alert notification strings.
+    redis_client : redis.Redis
+        Connected Redis client used to consume alert messages.
+    alert_key : str
+        Redis key to consume alert messages from (blpop).
     """
 
-    def __init__(self, alert_queue: queue.Queue):
-        self._queue = alert_queue
+    def __init__(self, redis_client: redis.Redis, alert_key: str = ALERT_QUEUE_KEY):
+        self._redis = redis_client
+        self._alert_key = alert_key
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="ReporterThread"
@@ -38,7 +39,6 @@ class AlertReporter:
     def stop(self) -> None:
         """Signal the reporter thread to stop."""
         self._stop_event.set()
-        self._queue.put(None)   # unblock blocking get()
 
     def is_alive(self) -> bool:
         return self._thread.is_alive()
@@ -48,22 +48,20 @@ class AlertReporter:
     # ------------------------------------------------------------------
 
     def report_alert(self, message: str) -> None:
-        """Print one alert message. Called directly from the run loop."""
+        """Print one alert message."""
         print(f"\n{'='*60}")
         print(f"  ⚠  {message}")
         print(f"{'='*60}\n")
 
     def _run(self) -> None:
-        """Main loop: block on queue, print every alert that arrives."""
+        """Main loop: blocking pop from Redis, print every alert."""
         while not self._stop_event.is_set():
-            try:
-                message = self._queue.get(timeout=1)
-                if message is None:   # sentinel sent by stop()
-                    break
-                self.report_alert(message)
-                self._queue.task_done()
-            except queue.Empty:
+            # blpop returns (key, value) or None on timeout
+            result = self._redis.blpop(self._alert_key, timeout=1)
+            if result is None:
                 continue
+            _, raw = result
+            self.report_alert(raw.decode())
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +69,9 @@ class AlertReporter:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import time
-    from shared_queues import alert_queue
+    from redis_config import make_redis_client
 
-    reporter = AlertReporter(alert_queue)
+    reporter = AlertReporter(make_redis_client())
     reporter.start()
 
     try:
