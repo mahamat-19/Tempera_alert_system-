@@ -146,7 +146,7 @@ class TestAlertDispatching:
     def test_alert_message_content(self):
         """Alert message must contain the expected text."""
         self._send_abnormal(ALERT_THRESHOLD)
-        message = self.redis.lpop(ALERT_QUEUE_KEY).decode()
+        message = self.redis.lpop(ALERT_QUEUE_KEY).decode()  # type: ignore
         assert "abnormal temperature readings" in message.lower()
         assert str(ALERT_THRESHOLD) in message
 

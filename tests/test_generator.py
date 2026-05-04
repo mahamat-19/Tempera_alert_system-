@@ -16,7 +16,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import fakeredis
-import pytest
 from client1_generator import TemperatureGenerator, TEMP_MIN, TEMP_MAX
 from redis_config import TEMPERATURE_QUEUE_KEY
 
@@ -58,7 +57,7 @@ class TestSendTemperature:
         """send_temperature() should push the given value to Redis."""
         self.generator.send_temperature(20.0)
         assert self.redis.llen(TEMPERATURE_QUEUE_KEY) == 1
-        assert float(self.redis.lpop(TEMPERATURE_QUEUE_KEY)) == 20.0
+        assert float(self.redis.lpop(TEMPERATURE_QUEUE_KEY).decode()) == 20.0  # type: ignore
 
     def test_send_multiple_readings(self):
         """Multiple calls should place multiple items on the queue."""
@@ -70,7 +69,7 @@ class TestSendTemperature:
     def test_queue_receives_correct_value(self):
         """The dequeued value must match exactly what was sent."""
         self.generator.send_temperature(-9.99)
-        value = float(self.redis.lpop(TEMPERATURE_QUEUE_KEY))
+        value = float(self.redis.lpop(TEMPERATURE_QUEUE_KEY).decode())  # type: ignore
         assert value == -9.99
 
 
@@ -84,7 +83,7 @@ class TestGeneratorThread:
         gen.start()
         time.sleep(0.4)   # allow a couple of cycles
         gen.stop()
-        assert r.llen(TEMPERATURE_QUEUE_KEY) > 0, (
+        assert r.llen(TEMPERATURE_QUEUE_KEY) > 0, (  # type: ignore
             "Redis queue should contain at least one reading after start()"
         )
 
